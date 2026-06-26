@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -19,9 +20,43 @@ pub struct CacheStore {
     max_bytes: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct CacheRecord<'a> {
+    pub key: CacheKey,
+    pub input: &'a str,
+    pub task_type: TaskType,
+    pub target_lang: &'a str,
+    pub model: &'a ModelConfig,
+    pub output: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentQuery {
+    pub input: String,
+    pub task_type: TaskType,
+    pub target_lang: String,
+    pub provider: String,
+    pub model: String,
+    pub output: String,
+    pub created_at: u64,
+    pub last_used_at: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecentFilter {
+    All,
+    Words,
+    Sentences,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CacheEntry {
     key: String,
+    input: String,
+    task_type: String,
+    target_lang: String,
+    provider: String,
+    model: String,
     output: String,
     created_at: u64,
     last_used_at: u64,
@@ -81,22 +116,84 @@ impl CacheStore {
         Ok(hit)
     }
 
-    pub fn insert(&self, key: CacheKey, output: &str) -> Result<()> {
-        if output.trim().is_empty() {
+    pub fn insert(&self, record: CacheRecord<'_>) -> Result<()> {
+        if record.output.trim().is_empty() {
             return Ok(());
         }
 
         let now = now_unix();
         let mut entries = self.load_entries()?;
-        entries.retain(|entry| self.is_fresh(entry, now) && entry.key != key.0);
+        entries.retain(|entry| self.is_fresh(entry, now) && entry.key != record.key.0);
         entries.push(CacheEntry {
-            key: key.0,
-            output: output.trim().to_string(),
+            key: record.key.0,
+            input: normalized_input(record.input),
+            task_type: record.task_type.cache_label().to_string(),
+            target_lang: record.target_lang.trim().to_string(),
+            provider: record.model.provider.as_str().to_string(),
+            model: record.model.model.clone(),
+            output: record.output.trim().to_string(),
             created_at: now,
             last_used_at: now,
         });
 
         self.write_entries(&mut entries)
+    }
+
+    pub fn recent_queries(&self, limit: usize, filter: RecentFilter) -> Result<Vec<RecentQuery>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let now = now_unix();
+        let mut entries = self.load_entries()?;
+        let original_len = entries.len();
+        entries.retain(|entry| self.is_fresh(entry, now));
+
+        if entries.len() != original_len {
+            self.write_entries(&mut entries)?;
+        }
+
+        let mut indexed_entries = entries.into_iter().enumerate().collect::<Vec<_>>();
+        indexed_entries.sort_by(|(left_index, left), (right_index, right)| {
+            right
+                .last_used_at
+                .cmp(&left.last_used_at)
+                .then_with(|| right_index.cmp(left_index))
+        });
+
+        let mut queries = Vec::new();
+        let mut seen = HashSet::new();
+        for (_, entry) in indexed_entries {
+            let Some(task_type) = TaskType::from_cache_label(&entry.task_type) else {
+                continue;
+            };
+
+            if !matches_filter(task_type, filter) {
+                continue;
+            }
+
+            let history_key = history_key(task_type, &entry.target_lang, &entry.input);
+            if !seen.insert(history_key) {
+                continue;
+            }
+
+            queries.push(RecentQuery {
+                input: entry.input,
+                task_type,
+                target_lang: entry.target_lang,
+                provider: entry.provider,
+                model: entry.model,
+                output: entry.output,
+                created_at: entry.created_at,
+                last_used_at: entry.last_used_at,
+            });
+
+            if queries.len() == limit {
+                break;
+            }
+        }
+
+        Ok(queries)
     }
 
     fn load_entries(&self) -> Result<Vec<CacheEntry>> {
@@ -151,6 +248,31 @@ impl CacheStore {
     }
 }
 
+fn matches_filter(task_type: TaskType, filter: RecentFilter) -> bool {
+    match filter {
+        RecentFilter::All => true,
+        RecentFilter::Words => task_type == TaskType::WordLookup,
+        RecentFilter::Sentences => task_type == TaskType::SentenceTranslation,
+    }
+}
+
+fn normalized_input(input: &str) -> String {
+    input
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn history_key(task_type: TaskType, target_lang: &str, input: &str) -> String {
+    format!(
+        "{}\0{}\0{}",
+        task_type.cache_label(),
+        target_lang.trim().to_ascii_lowercase(),
+        normalized_input(input).to_ascii_lowercase()
+    )
+}
+
 fn cache_path() -> Option<PathBuf> {
     std::env::var_os("TRANSLATOR_CACHE_PATH")
         .map(PathBuf::from)
@@ -197,6 +319,32 @@ mod tests {
         }
     }
 
+    fn record<'a>(
+        model: &'a ModelConfig,
+        input: &'a str,
+        task_type: TaskType,
+        output: &'a str,
+    ) -> CacheRecord<'a> {
+        CacheRecord {
+            key: CacheKey::new(model, "auto", task_type, input),
+            input,
+            task_type,
+            target_lang: "auto",
+            model,
+            output,
+        }
+    }
+
+    fn store(name: &str, max_bytes: u64) -> (PathBuf, CacheStore) {
+        let dir = std::env::temp_dir().join(format!("translator-cache-test-{name}-{}", now_unix()));
+        let store = CacheStore {
+            path: dir.join("cache.jsonl"),
+            ttl_seconds: 30 * 24 * 60 * 60,
+            max_bytes,
+        };
+        (dir, store)
+    }
+
     #[test]
     fn cache_key_changes_with_model() {
         let a = CacheKey::new(&model("a"), "auto", TaskType::SentenceTranslation, "hello");
@@ -206,25 +354,115 @@ mod tests {
     }
 
     #[test]
-    fn prunes_oldest_entry_when_cache_is_too_large() {
-        let dir = std::env::temp_dir().join(format!("translator-cache-test-{}", now_unix()));
-        let store = CacheStore {
-            path: dir.join("cache.jsonl"),
-            ttl_seconds: 30 * 24 * 60 * 60,
-            max_bytes: 180,
-        };
+    fn insert_replaces_duplicate_query_record() {
+        let (dir, store) = store("replace", 10_000);
+        let model = model("m");
 
         store
-            .insert(
-                CacheKey::new(&model("m"), "auto", TaskType::SentenceTranslation, "one"),
-                "first output",
-            )
+            .insert(record(
+                &model,
+                "hello",
+                TaskType::SentenceTranslation,
+                "你好",
+            ))
             .unwrap();
         store
-            .insert(
-                CacheKey::new(&model("m"), "auto", TaskType::SentenceTranslation, "two"),
+            .insert(record(
+                &model,
+                "hello",
+                TaskType::SentenceTranslation,
+                "您好",
+            ))
+            .unwrap();
+
+        let queries = store.recent_queries(10, RecentFilter::All).unwrap();
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].output, "您好");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recent_queries_filter_and_sort_by_last_used() {
+        let (dir, store) = store("recent", 10_000);
+        let model = model("m");
+
+        store
+            .insert(record(&model, "burst", TaskType::WordLookup, "WORD: burst"))
+            .unwrap();
+        store
+            .insert(record(
+                &model,
+                "hello world",
+                TaskType::SentenceTranslation,
+                "你好，世界",
+            ))
+            .unwrap();
+
+        let all = store.recent_queries(10, RecentFilter::All).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].input, "hello world");
+
+        let words = store.recent_queries(10, RecentFilter::Words).unwrap();
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].task_type, TaskType::WordLookup);
+
+        let sentences = store.recent_queries(10, RecentFilter::Sentences).unwrap();
+        assert_eq!(sentences.len(), 1);
+        assert_eq!(sentences[0].task_type, TaskType::SentenceTranslation);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recent_queries_deduplicate_by_input_target_and_task() {
+        let (dir, store) = store("dedupe", 10_000);
+        let model_a = model("a");
+        let model_b = model("b");
+
+        store
+            .insert(record(
+                &model_a,
+                "hello",
+                TaskType::SentenceTranslation,
+                "你好",
+            ))
+            .unwrap();
+        store
+            .insert(record(
+                &model_b,
+                "hello",
+                TaskType::SentenceTranslation,
+                "您好",
+            ))
+            .unwrap();
+
+        let all = store.recent_queries(10, RecentFilter::All).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].model, "b");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prunes_oldest_entry_when_cache_is_too_large() {
+        let (dir, store) = store("prune", 260);
+        let model = model("m");
+
+        store
+            .insert(record(
+                &model,
+                "one",
+                TaskType::SentenceTranslation,
+                "first output",
+            ))
+            .unwrap();
+        store
+            .insert(record(
+                &model,
+                "two",
+                TaskType::SentenceTranslation,
                 "second output with a little more text",
-            )
+            ))
             .unwrap();
 
         assert!(store.load_entries().unwrap().len() <= 1);

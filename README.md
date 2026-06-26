@@ -43,6 +43,9 @@ If no text argument is provided, input is read from standard input:
 "AI will reshape the global technology industry." | translate
 ```
 
+Running `translate` without input in an interactive terminal prints the built-in
+help.
+
 ## Input Modes
 
 Default mode accepts up to 200 UTF-8 bytes:
@@ -65,6 +68,20 @@ translate --file .\note.txt --target English
 
 Obvious non-linguistic input, such as URLs, paths, hashes, JSON, config
 fragments, or code, is skipped locally.
+
+## Recent Queries
+
+Show recent unique queries from the local cache without calling the model:
+
+```powershell
+translate --recent 10
+translate --recent-words 10
+translate --recent-sentences 10
+```
+
+Repeated queries are shown once, ordered by most recent use. `--recent` includes
+word, phrase, and sentence queries. `--recent-words` shows only word lookups, and
+`--recent-sentences` shows only sentence translations.
 
 ## Configuration
 

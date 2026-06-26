@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskType {
     WordLookup,
     PhraseLookup,
@@ -35,6 +37,15 @@ impl TaskType {
             Self::WordLookup => "word",
             Self::PhraseLookup => "phrase",
             Self::SentenceTranslation => "sentence",
+        }
+    }
+
+    pub fn from_cache_label(value: &str) -> Option<Self> {
+        match value {
+            "word" => Some(Self::WordLookup),
+            "phrase" => Some(Self::PhraseLookup),
+            "sentence" => Some(Self::SentenceTranslation),
+            _ => None,
         }
     }
 }

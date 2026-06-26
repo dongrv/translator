@@ -53,6 +53,11 @@ impl ConfigLoader {
         let sources = EnvSources::load()?;
         AppConfig::from_sources(&sources, overrides)
     }
+
+    pub fn load_cache(overrides: ConfigOverrides) -> Result<CacheConfig> {
+        let sources = EnvSources::load()?;
+        Ok(CacheConfig::from_sources(&sources, &overrides))
+    }
 }
 
 impl AppConfig {
