@@ -1,7 +1,14 @@
 [package]
-name = "translator"
+name = "rig-translator-cli"
 version = "0.1.0"
 edition = "2021"
+description = "A streaming AI translation CLI powered by rig with multi-provider configuration and local caching."
+license = "Apache-2.0"
+repository = "https://github.com/dongrv/translator"
+homepage = "https://github.com/dongrv/translator"
+readme = "README.md"
+keywords = ["translator", "cli", "ai", "llm", "rig"]
+categories = ["command-line-utilities", "text-processing"]
 
 [[bin]]
 name = "translate"

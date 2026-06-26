@@ -10,10 +10,16 @@ English word or phrase lookup locally, and streams model output.
 ## Install
 
 ```powershell
+cargo install rig-translator-cli
+```
+
+For local development:
+
+```powershell
 cargo install --path .
 ```
 
-The package name is `translator`; the binary is `translate`.
+The package name is `rig-translator-cli`; the binary is `translate`.
 
 ## Quick Start
 

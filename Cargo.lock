@@ -5990,6 +5990,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rig-translator-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dotenvy",
+ "futures",
+ "rig",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7224,21 +7239,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "translator"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "dotenvy",
- "futures",
- "rig",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
 ]
 
 [[package]]
